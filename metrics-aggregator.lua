@@ -8,7 +8,7 @@ local config = {
     domains = {
         "example.come", -- FIX: use actual domain names here
     },
-    cache_ttl = 1,
+    cache_ttl = 10, -- seconds (short cache for real-time monitoring)
     -- Persistence configuration
     persistence = {
         enabled = true,
