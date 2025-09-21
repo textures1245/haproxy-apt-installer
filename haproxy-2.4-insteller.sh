@@ -107,7 +107,7 @@ else
     cp -r ./conf.d/* /etc/haproxy/conf.d/
 fi
 
-if [ "$MIGRATED_TO_HAPROXY" = true ]; then
+if [ "$MIGRATED_TO_HAPROXY" = false ]; then
     sed -i -E 's|bind \*:80|bind *:4480|g' /etc/haproxy/conf.d/20-fe-http-entrypoint.cfg
     sed -i -E 's|bind \*:443|bind *:4443|g' /etc/haproxy/conf.d/20-fe-http-entrypoint.cfg
 fi
@@ -144,7 +144,7 @@ echo """
 4. Start/restart HAProxy: systemctl restart haproxy (IF EVERYTHING IS OK)
 """
 
-if [ "$MIGRATED_TO_HAPROXY" = true ]; then
+if [ "$MIGRATED_TO_HAPROXY" = false ]; then
    echo """
    -----  Migration Hint -----
     We had changed http entry ports in /etc/haproxy/conf.d/20-fe-http-entrypoint.cfg to avoid conflict with existing services (e.g., Nginx, Apache)
