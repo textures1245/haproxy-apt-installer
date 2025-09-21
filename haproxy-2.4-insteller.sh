@@ -101,15 +101,18 @@ fi
 
 if [ "$USED_MONITOR_ADDON" = true ]; then
     cp -r ./metrics-addon-conf.d/* /etc/haproxy/conf.d/
-    sed -i -E 's|# ?bind \*:80|bind *:4480|g' /etc/haproxy/conf.d/20-fe-http-entrypoint.cfg
-    sed -i -E 's|# ?bind \*:443|bind *:4443|g' /etc/haproxy/conf.d/20-fe-http-entrypoint.cfg
-
     VM_NAME=$(hostname)
     sed -i -E "s|VM_NAME|$VM_NAME|g" /etc/haproxy/conf.d/00-global-defaults.cfg
 else
     cp -r ./conf.d/* /etc/haproxy/conf.d/
 fi
 
+if [ "$MIGRATED_TO_HAPROXY" = true ]; then
+    sed -i -E 's|bind \*:80|bind *:4480|g' /etc/haproxy/conf.d/20-fe-http-entrypoint.cfg
+    sed -i -E 's|bind \*:443|bind *:4443|g' /etc/haproxy/conf.d/20-fe-http-entrypoint.cfg
+fi
+
+mv /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.unused.cfg
 
 cp ./metrics-aggregator.lua /etc/haproxy/metrics-aggregator.lua
 
@@ -124,7 +127,11 @@ systemctl daemon-reload
 systemctl restart logrotate.service
 systemctl restart rsyslog.service
 
-haproxy -f /etc/haproxy/conf.d -c
+{
+  set +e
+  haproxy -f /etc/haproxy/conf.d -c
+  set -e
+}
 
 echo "✅ HAProxy, logging, and config directories are set up!"
 
@@ -147,7 +154,7 @@ if [ "$MIGRATED_TO_HAPROXY" = true ]; then
     3. Testing by visiting http://your-server-ip:4480 and https://your-server-ip:4443 first to confirm HAProxy is working
     
     If everything looks good, 
-    1. Stop your old existing proxy services (e.g., Nginx, Apache)
+    1. Stop your old existing proxy services (e.g., Nginx, Apache) by systemctl stop/disable them
     2. Change ports back to standard (http 80, https 443) in /etc/haproxy/conf.d/20-fe-http-entrypoint.cfg
     3. Check HAproxy config, then restart HAProxy: systemctl restart haproxy
     4. Finally, test by visiting http://your-domain and https://your-domain
