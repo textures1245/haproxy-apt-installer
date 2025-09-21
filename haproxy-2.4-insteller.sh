@@ -79,12 +79,15 @@ mkdir -p /etc/haproxy/metrics
 openssl req -x509 -newkey rsa:4096 -keyout /etc/haproxy/ssl/nginx-selfsigned.key -out /etc/haproxy/ssl/nginx-selfsigned.crt -days 365 -nodes
 cat /etc/haproxy/ssl/nginx-selfsigned.key /etc/haproxy/ssl/nginx-selfsigned.crt > /etc/haproxy/ssl/nginx-selfsigned.pem
 
-read -p "This is a fresh install or migration from other proxy to HAproxy? (y/n): " is_migration
+read -p """
+This is a fresh install (y) 
+Or migration from other proxy to HAproxy (n)? 
+(y/n) : """ is_migration
 if [[ "$is_migration" =~ ^[Yy]$ ]]; then
-    MIGRATED_TO_HAPROXY=true
-    echo "Migration mode: ON. Change http entry ports of to avoid conflict. (http 80 -> 4480, https 443 -> 4443)"
+    MIGRATED_TO_HAPROXY=false
+    echo "Fresh install mode: ON. Using standard ports (http 80, https 443)."
 else
-    echo "Fresh install mode: OFF. Using standard ports (http 80, https 443)."
+    echo "Migration mode: ON. Change http entry ports of to avoid conflict. (http 80 -> 4480, https 443 -> 4443)"
 fi
 
 read -p "Do you want to enable User Session Monitoring with Metrics Addon? (y/n): " enable_monitoring
