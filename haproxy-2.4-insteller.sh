@@ -100,6 +100,9 @@ if [ "$USED_MONITOR_ADDON" = true ]; then
     cp -r ./metrics-addon-conf.d/* /etc/haproxy/conf.d/
     sed -i -E 's|# ?bind \*:80|bind *:4480|g' /etc/haproxy/conf.d/20-fe-http-entrypoint.cfg
     sed -i -E 's|# ?bind \*:443|bind *:4443|g' /etc/haproxy/conf.d/20-fe-http-entrypoint.cfg
+
+    VM_NAME=$(hostname)
+    sed -i -E "s|VM_NAME|$VM_NAME|g" /etc/haproxy/conf.d/00-global-defaults.cfg
 else
     cp -r ./conf.d/* /etc/haproxy/conf.d/
 fi
