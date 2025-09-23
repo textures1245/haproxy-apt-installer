@@ -1,14 +1,11 @@
 -- HAProxy Lua Metrics Aggregator (Production Version)
 -- Uses lua-cjson library for reliable JSON handling
-
 local cjson = require("cjson")
 
 -- Configuration
 local config = {
-    domains = {
-        "example.come", -- FIX: use actual domain names here
-    },
-    cache_ttl = 10, -- seconds (short cache for real-time monitoring)
+    domains = {"example.com"},
+    cache_ttl = 60, -- seconds (short cache for real-time monitoring)
     -- Persistence configuration
     persistence = {
         enabled = true,
@@ -41,29 +38,42 @@ end
 local function get_current_sessions_from_backend(domain)
     -- Map domain names to their respective backend names (stick tables are now in backends)
     local domain_backend_map = {
-        ["example.come"] = "example.come", -- FIX: use actual domain names here
+        ["example.come"] = "example.come"
     }
-    
+
     local backend_name = domain_backend_map[domain]
     if not backend_name then
         return 0
     end
-    
+
     local success, result = pcall(function()
         local socket = core.tcp()
-        if not socket then return 0 end
+        if not socket then
+            return 0
+        end
+        socket:settimeout(100) -- 1 second timeout to avoid deadlock
 
         local connect_result = socket:connect("/var/run/haproxy/admin.sock")
-        if not connect_result then 
+        if not connect_result then
             socket:close()
-            return 0 
+            return 0
         end
 
-        socket:send("show table " .. backend_name .. "\n")
-        local response = socket:receive("*a")
-        socket:close()
-        
-        if response then
+        local ok, send_err = pcall(function()
+            socket:send("show table " .. backend_name .. "\n")
+        end)
+        if not ok then
+            socket:close()
+            return 0
+        end
+
+        local response
+        local ok_recv, recv_err = pcall(function()
+            response = socket:receive("*a")
+        end)
+        socket:close() -- Always close socket, even on error
+
+        if ok_recv and response then
             -- Efficiently parse the 'used' count from the table's header line.
             -- Example: "# table: loadtest-urbrand.one.th, type: string, size:100000, used:5"
             local used_count_str = response:match("used:(%d+)")
@@ -73,7 +83,7 @@ local function get_current_sessions_from_backend(domain)
         end
         return 0
     end)
-    
+
     return success and result or 0
 end
 
@@ -102,7 +112,7 @@ local function save_persistent_metrics()
     if not config.persistence.enabled then
         return false
     end
-    
+
     local success, err = pcall(function()
         local file = io.open(config.persistence.file_path, "w")
         if file then
@@ -121,7 +131,7 @@ local function save_persistent_metrics()
         end
         return false
     end)
-    
+
     -- Force immediate save for testing
     if not success then
         -- Try alternative path if original fails
@@ -144,7 +154,7 @@ local function save_persistent_metrics()
         end)
         return alt_success
     end
-    
+
     return success
 end
 
@@ -153,18 +163,18 @@ local function load_persistent_metrics()
     if not config.persistence.enabled or not config.persistence.restore_on_startup then
         return false
     end
-    
+
     local success, result = pcall(function()
         local file = io.open(config.persistence.file_path, "r")
         if file then
             local content = file:read("*a")
             file:close()
-            
+
             if content and content ~= "" then
                 local data = cjson.decode(content)
                 if data and data.metrics then
                     persistent_metrics.data = data.metrics
-                    
+
                     -- Set base values from loaded backup for each domain
                     for domain, backup_data in pairs(persistent_metrics.data) do
                         if domain ~= "global" then
@@ -178,12 +188,13 @@ local function load_persistent_metrics()
                             backup_data.base_errors_response = backup_data.errors_response_cumulative or 0
                         end
                     end
-                    
+
                     -- Increment restart counter
                     if not persistent_metrics.data.global then
                         persistent_metrics.data.global = {}
                     end
-                    persistent_metrics.data.global.restart_count = (persistent_metrics.data.global.restart_count or 0) + 1
+                    persistent_metrics.data.global.restart_count =
+                        (persistent_metrics.data.global.restart_count or 0) + 1
                     persistent_metrics.data.global.last_restart = os.time()
                     return true
                 end
@@ -191,7 +202,7 @@ local function load_persistent_metrics()
         end
         return false
     end)
-    
+
     return success
 end
 
@@ -200,12 +211,12 @@ local function update_persistent_metrics(domain, server_info)
     if not config.persistence.enabled then
         return server_info
     end
-    
+
     local persistent = persistent_metrics.data[domain]
     if not persistent then
         return server_info
     end
-    
+
     -- Get current HAProxy values (these reset when HAProxy restarts)
     local current_total_sessions = server_info.total_sessions or 0
     local current_requests = server_info.requests_total or 0
@@ -214,7 +225,7 @@ local function update_persistent_metrics(domain, server_info)
     local current_connections = server_info.connection_total or 0
     local current_errors_conn = server_info.errors_connection or 0
     local current_errors_resp = server_info.errors_response or 0
-    
+
     -- Update cumulative values: backup_value + current_haproxy_value
     -- This way we always preserve the total count across restarts
     persistent.total_sessions_cumulative = (persistent.base_total_sessions or 0) + current_total_sessions
@@ -224,12 +235,12 @@ local function update_persistent_metrics(domain, server_info)
     persistent.total_connections_cumulative = (persistent.base_total_connections or 0) + current_connections
     persistent.errors_connection_cumulative = (persistent.base_errors_connection or 0) + current_errors_conn
     persistent.errors_response_cumulative = (persistent.base_errors_response or 0) + current_errors_resp
-    
+
     -- Update max values
     if (server_info.session_rate_max or 0) > persistent.session_rate_max_ever then
         persistent.session_rate_max_ever = server_info.session_rate_max or 0
     end
-    
+
     -- Store current values for debugging
     persistent.last_total_sessions = current_total_sessions
     persistent.last_requests = current_requests
@@ -239,7 +250,7 @@ local function update_persistent_metrics(domain, server_info)
     persistent.last_errors_conn = current_errors_conn
     persistent.last_errors_resp = current_errors_resp
     persistent.last_update = os.time()
-    
+
     -- UPDATE server_info with cumulative values instead of raw HAProxy values
     server_info.total_sessions = persistent.total_sessions_cumulative
     server_info.requests_total = persistent.total_requests_cumulative
@@ -248,12 +259,12 @@ local function update_persistent_metrics(domain, server_info)
     server_info.connection_total = persistent.total_connections_cumulative
     server_info.errors_connection = persistent.errors_connection_cumulative
     server_info.errors_response = persistent.errors_response_cumulative
-    
+
     -- Update session_rate_max with the ever-recorded maximum
     if persistent.session_rate_max_ever > (server_info.session_rate_max or 0) then
         server_info.session_rate_max = persistent.session_rate_max_ever
     end
-    
+
     return server_info
 end
 
@@ -278,30 +289,30 @@ local function get_haproxy_stats()
         persistent_metrics.startup_restored = true
     end
     init_persistent_storage()
-    
+
     -- Force initial save to create the file
     if config.persistence.enabled and not persistent_metrics.first_save_done then
         save_persistent_metrics()
         persistent_metrics.first_save_done = true
     end
-    
+
     local stats = {}
-    
+
     -- Get stats for each configured domain
     for _, domain in ipairs(config.domains) do
-        local backend_name = domain  -- Use full domain name as backend name
-        
+        local backend_name = domain -- Use full domain name as backend name
+
         -- Initialize with default values
         local server_info = {
             domain = domain,
-            current_sessions = 0,  -- Current active user sessions (scur) - ACTUAL USERS CURRENTLY USING DOMAIN
-            max_sessions = 0,  -- Configured session limit (slim)
+            current_sessions = 0, -- Current active user sessions (scur) - ACTUAL USERS CURRENTLY USING DOMAIN
+            max_sessions = 0, -- Configured session limit (slim)
             total_sessions = 0,
-            session_rate = 0,  -- Current sessions per second
-            session_rate_max = 0,  -- Max sessions per second
-            connection_rate = 0,  -- Current connections per second
-            connection_total = 0,  -- Total connections
-            requests_total = 0,  -- Total HTTP requests
+            session_rate = 0, -- Current sessions per second
+            session_rate_max = 0, -- Max sessions per second
+            connection_rate = 0, -- Current connections per second
+            connection_total = 0, -- Total connections
+            requests_total = 0, -- Total HTTP requests
             bytes_in = 0,
             bytes_out = 0,
             status = "UNKNOWN",
@@ -311,42 +322,46 @@ local function get_haproxy_stats()
             errors_connection = 0,
             errors_response = 0
         }
-        
+
         -- ALWAYS get current sessions from backend stats
         server_info.current_sessions = get_current_sessions_from_backend(domain)
-        
+
         -- Try to get stats using HAProxy stats socket
         local socket_path = "/var/run/haproxy/admin.sock"
         local success, result = pcall(function()
             -- Connect to HAProxy stats socket
             local socket = core.tcp()
             if socket then
+                socket:settimeout(100) -- 1 second timeout
                 local connect_result = socket:connect(socket_path)
                 if connect_result then
-                    -- Send stats command
-                    socket:send("show stat\n")
-                    local response = socket:receive("*a")
+                    local ok_send = pcall(function()
+                        socket:send("show stat\n")
+                    end)
+                    local response
+                    local ok_recv = pcall(function()
+                        response = socket:receive("*a")
+                    end)
                     socket:close()
-                    
-                    if response then
+                    if ok_send and ok_recv and response then
                         -- Parse CSV stats output
                         local lines = {}
                         for line in response:gmatch("[^\r\n]+") do
                             table.insert(lines, line)
                         end
-                        
+
                         -- Look for our backend in the stats
                         for i, line in ipairs(lines) do
                             local fields = {}
                             for field in line:gmatch("([^,]*)") do
                                 table.insert(fields, field)
                             end
-                            
+
                             -- Check if this line matches our backend
                             if fields[1] and (fields[1] == backend_name or fields[1]:find(domain:gsub("%..*", ""))) then
                                 -- Keep other HAProxy metrics
-                                server_info.active_sessions = tonumber(fields[5]) or 0  -- HAProxy's internal estimation
-                                
+                                server_info.active_sessions = tonumber(fields[5]) or 0 -- HAProxy's internal estimation
+
                                 -- จำนวน session ทั้งหมดที่เคยใช้งาน
                                 server_info.total_sessions = tonumber(fields[8]) or 0
                                 -- จำนวนข้อมูลที่รับเข้ามา (ไบต์)
@@ -362,18 +377,17 @@ local function get_haproxy_stats()
                                 -- จำนวนข้อผิดพลาดในการตอบสนอง
                                 server_info.errors_response = tonumber(fields[15]) or 0
                                 -- Session and connection metrics
-                                server_info.max_sessions = tonumber(fields[6]) or 0  -- slim field (configured session limit)
-                                
+                                server_info.max_sessions = tonumber(fields[6]) or 0 -- slim field (configured session limit)
+
                                 -- Traffic metrics for better user monitoring
-                                server_info.session_rate = tonumber(fields[34]) or 0  -- Current sessions per second
-                                server_info.session_rate_max = tonumber(fields[36]) or 0  -- Max sessions per second ever reached
-                                server_info.connection_rate = tonumber(fields[78]) or 0  -- Current connections per second  
-                                server_info.connection_total = tonumber(fields[80]) or 0  -- Total connections since start
-                                
+                                server_info.session_rate = tonumber(fields[34]) or 0 -- Current sessions per second
+                                server_info.session_rate_max = tonumber(fields[36]) or 0 -- Max sessions per second ever reached
+                                server_info.connection_rate = tonumber(fields[78]) or 0 -- Current connections per second  
+                                server_info.connection_total = tonumber(fields[80]) or 0 -- Total connections since start
+
                                 -- Request metrics (better for user activity monitoring)
-                                server_info.requests_total = tonumber(fields[49]) or 0  -- Total HTTP requests
-                            
-        
+                                server_info.requests_total = tonumber(fields[49]) or 0 -- Total HTTP requests
+
                                 -- Determine status (field 18 in HAProxy stats)
                                 local status_field = fields[18] or "UNKNOWN"
                                 if status_field == "UP" or status_field == "OPEN" then
@@ -387,34 +401,36 @@ local function get_haproxy_stats()
                             end
                         end
                     end
+                else
+                    socket:close()
                 end
             end
         end)
-        
+
         -- If socket method fails, try alternative approach with simple status check
         if not success then
             -- Fallback: just check if we can resolve basic info
-            server_info.status = "ACTIVE"  -- Assume active if script is running
+            server_info.status = "ACTIVE" -- Assume active if script is running
             server_info.last_error = "Stats socket unavailable"
         end
-        
+
         -- Update persistent metrics for this domain and get cumulative values
         server_info = update_persistent_metrics(domain, server_info)
-        
+
         -- Get combined metrics (current + persistent) - now just returns server_info as-is
         server_info = get_combined_metrics(domain, server_info)
-        
+
         stats[domain] = server_info
     end
-    
+
     -- Periodic backup of persistent data
     local current_time = os.time()
-    if config.persistence.enabled and 
-       (current_time - persistent_metrics.last_backup) >= config.persistence.backup_interval then
+    if config.persistence.enabled and (current_time - persistent_metrics.last_backup) >=
+        config.persistence.backup_interval then
         save_persistent_metrics()
         persistent_metrics.last_backup = current_time
     end
-    
+
     return stats
 end
 
@@ -423,18 +439,18 @@ local function get_domain_metrics()
     if is_cache_valid() then
         return metrics_cache.data
     end
-    
+
     local stats = get_haproxy_stats()
     local result = {
         timestamp = get_timestamp(),
         total_domains = #config.domains,
         domains = stats
     }
-    
+
     -- Update cache
     metrics_cache.data = result
     metrics_cache.timestamp = os.time()
-    
+
     return result
 end
 
@@ -442,7 +458,7 @@ end
 local function get_single_domain_metrics(domain_name)
     local all_metrics = get_domain_metrics()
     local domain_data = all_metrics.domains[domain_name]
-    
+
     if not domain_data then
         return {
             error = "Domain not found",
@@ -451,7 +467,7 @@ local function get_single_domain_metrics(domain_name)
             available_domains = config.domains
         }
     end
-    
+
     return {
         timestamp = all_metrics.timestamp,
         domain = domain_name,
@@ -463,14 +479,14 @@ end
 local function health_check()
     local restart_count = 0
     local last_restart = "never"
-    
+
     if persistent_metrics.data.global then
         restart_count = persistent_metrics.data.global.restart_count or 0
         if persistent_metrics.data.global.last_restart then
             last_restart = os.date("!%Y-%m-%dT%H:%M:%SZ", persistent_metrics.data.global.last_restart)
         end
     end
-    
+
     return {
         status = "healthy",
         timestamp = get_timestamp(),
@@ -493,7 +509,7 @@ end
 -- SPA Heartbeat endpoint for session renewal
 local function heartbeat_response()
     return {
-        status = "ok",
+        status = "ok"
     }
 end
 
@@ -505,7 +521,7 @@ local function get_persistence_info()
             timestamp = get_timestamp()
         }
     end
-    
+
     local persistence_data = {
         timestamp = get_timestamp(),
         persistence_enabled = config.persistence.enabled,
@@ -515,7 +531,7 @@ local function get_persistence_info()
         startup_restored = persistent_metrics.startup_restored,
         domains_data = {}
     }
-    
+
     -- Add summary of persistent data for each domain
     for domain, data in pairs(persistent_metrics.data) do
         if domain ~= "global" then
@@ -531,12 +547,12 @@ local function get_persistence_info()
             }
         end
     end
-    
+
     -- Add global info
     if persistent_metrics.data.global then
         persistence_data.global = persistent_metrics.data.global
     end
-    
+
     return persistence_data
 end
 
@@ -548,14 +564,14 @@ local function reset_persistence()
             timestamp = get_timestamp()
         }
     end
-    
+
     -- Clear all persistent data
     persistent_metrics.data = {}
     init_persistent_storage()
-    
+
     -- Save empty state
     save_persistent_metrics()
-    
+
     return {
         status = "success",
         message = "Persistence data has been reset",
@@ -567,7 +583,7 @@ end
 function metrics_api(applet)
     local path = applet.path
     local method = applet.method
-    
+
     -- Only GET requests
     if method ~= "GET" then
         local error_response = cjson.encode({
@@ -576,31 +592,31 @@ function metrics_api(applet)
             allowed = {"GET"},
             timestamp = get_timestamp()
         })
-        
+
         applet:set_status(405)
         applet:add_header("content-type", "application/json")
         applet:start_response()
         applet:send(error_response)
         return
     end
-    
+
     local response_data
     local status = 200
-    
+
     -- Route requests
-    if path == "/api/heartbeat" then
+    if path == "/   " then
         response_data = heartbeat_response()
     elseif path == "/api/health" then
         response_data = health_check()
     elseif path == "/api/metrics/domains" then
         response_data = get_domain_metrics()
-        
+
     elseif path == "/api/metrics/persistence" then
         response_data = get_persistence_info()
-        
+
     elseif path == "/api/metrics/persistence/reset" then
         response_data = reset_persistence()
-        
+
     elseif path:match("^/api/metrics/domain/") then
         local domain_name = path:match("/api/metrics/domain/([^/?]+)")
         if domain_name then
@@ -618,27 +634,21 @@ function metrics_api(applet)
             }
             status = 400
         end
-        
+
     else
         response_data = {
             error = "Endpoint not found",
             path = path,
-            available_endpoints = {
-                "/api/heartbeat",             
-                "/api/health",
-                "/api/metrics/domains", 
-                "/api/metrics/persistence",
-                "/api/metrics/persistence/reset",
-                "/api/metrics/domain/{domain_name}"
-            },
+            available_endpoints = {"/api/heartbeat", "/api/health", "/api/metrics/domains", "/api/metrics/persistence",
+                                   "/api/metrics/persistence/reset", "/api/metrics/domain/{domain_name}"},
             timestamp = get_timestamp()
         }
         status = 404
     end
-    
+
     -- Encode JSON response
     local json_response = cjson.encode(response_data)
-    
+
     -- Send response
     applet:set_status(status)
     applet:add_header("content-type", "application/json")

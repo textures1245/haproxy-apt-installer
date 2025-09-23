@@ -74,6 +74,12 @@ mkdir -p /etc/haproxy/ssl
 mkdir -p /etc/haproxy/errors
 mkdir -p /etc/haproxy/metrics
 
+chown -R haproxy:haproxy /etc/haproxy
+chmod 755 /etc/haproxy
+chmod 755 /etc/haproxy/conf.d
+chmod 755 /etc/haproxy/ssl
+chmod 755 /etc/haproxy/errors
+chmod 775 /etc/haproxy/metrics
 
 
 openssl req -x509 -newkey rsa:4096 -keyout /etc/haproxy/ssl/nginx-selfsigned.key -out /etc/haproxy/ssl/nginx-selfsigned.crt -days 365 -nodes
