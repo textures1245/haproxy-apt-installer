@@ -1,5 +1,9 @@
 # คู่มือการใช้งานสคริปต์ `haproxy-2-4-installer.sh`
 
+```bash
+git clone  https://github.com/textures1245/haproxy-apt-installer.git
+```
+
 ## 1. สคริปต์นี้ทำอะไรบ้าง
 
 สคริปต์นี้ช่วยติดตั้งและตั้งค่าระบบ HAProxy พร้อมระบบล็อก (rsyslog/logrotate) และ Metrics Addon สำหรับติดตาม session/domain แบบอัตโนมัติ เหมาะสำหรับการใช้งานใหม่หรือย้ายจาก Proxy เดิม เช่น NGINX
